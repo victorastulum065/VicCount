@@ -8,18 +8,15 @@ Pui o poză și îți spune câte obiecte sunt. Merge pe **telefon**, totul rule
 
 | Ce faci | Ce se întâmplă |
 |---|---|
-| Doar poza | automat: găsește tipul dominant de obiect și le numără |
-| Scrii ce (ro sau en: *sticle, oameni, monede*) | numără doar asta |
+| Doar poza | automat: separă obiectele de fundal, alege singur un exemplu și numără tot ce seamănă |
 | Tragi un chenar peste **un** obiect | numără tot ce seamănă cu el (cel mai precis, merge pe orice) |
 | Atingi un punct / un loc gol | scoți / adaugi manual |
 
-Modele, rulate în browser (ONNX, int8):
-- **Grounding DINO tiny**: detecție open-vocabulary după text.
-- **DINOv2 (cu registre) small**: numărare după exemplu prin similaritate de trăsături, metoda *CountingDINO* (WACV 2026, fără antrenare, pe orice obiect).
+Model: **DINOv2 cu registre (small, int8, ~24 MB)**, rulat în browser (ONNX Runtime WASM). Numărarea după exemplu folosește metoda *CountingDINO* (WACV 2026, fără antrenare). Consum de memorie sub ~750 MB, deci merge pe telefon.
 
-Pentru puține obiecte se folosește detectorul. Pentru multe obiecte sau după exemplu se folosește similaritatea DINOv2, pe bucăți de înaltă rezoluție.
+Automatul merge bine pe obiecte distincte pe fundal simplu. La obiecte lipite sau pe fundal încărcat, trage un chenar.
 
-Prima deschidere descarcă ~250 MB (model + motor), o singură dată. De preferat pe Wi-Fi.
+Prima deschidere descarcă ~45 MB, o singură dată.
 
 ## Publicare
 

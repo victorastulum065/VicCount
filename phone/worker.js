@@ -1,10 +1,8 @@
 // VicCount — motorul de numărare, rulează în Web Worker, 100% pe dispozitiv.
-//  1) Grounding DINO tiny  -> găsește obiectele după text ("object" în modul automat)
-//  2) DINOv2-reg small     -> numărare după exemplu (metoda CountingDINO, WACV 2026):
-//                             similaritate de trăsături cu exemplul -> hartă de densitate -> sumă
-import {
-  pipeline, AutoModel, Tensor, RawImage, env,
-} from './vendor/transformers.min.js';
+// Un singur model mic (DINOv2 cu registre, small, int8 ~24 MB) => încape în memoria oricărui telefon.
+//  - după exemplu: metoda CountingDINO (WACV 2026): similaritate de trăsături cu exemplul -> vârfuri
+//  - automat: separă obiectele de fundal (PCA pe trăsături), alege singur exemplul, apoi la fel
+import { AutoModel, Tensor, env } from './vendor/transformers.min.js';
 
 const BASE = new URL('./', self.location.href).href;
 env.allowRemoteModels = false;
@@ -15,103 +13,42 @@ env.backends.onnx.wasm.wasmPaths = BASE + 'vendor/';
 env.backends.onnx.wasm.numThreads = self.crossOriginIsolated
   ? Math.min(4, navigator.hardwareConcurrency || 2) : 1;
 
-const DET_ID = 'grounding-dino-tiny';
 const FEAT_ID = 'dinov2-reg-small';
 const TILE = 518, PATCH = 14, G = TILE / PATCH;    // 37x37 patch-uri / bucată
 const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
+const MAX_TILES = 9;
 
-let detector = null, featModel = null;
+let featModel = null;
 
 const post = (type, data) => self.postMessage({ type, ...data });
 const progress = (label) => (p) => {
   if (p.status === 'progress' && p.total) post('progress', { label, file: p.file, loaded: p.loaded, total: p.total });
 };
 
-function loadDetector() {
-  if (!detector) {
-    detector = pipeline('zero-shot-object-detection', DET_ID, {
-      dtype: 'q8', device: 'wasm', progress_callback: progress('Detector'),
-    });
-  }
-  return detector;
-}
 function loadFeat() {
   if (!featModel) {
     featModel = AutoModel.from_pretrained(FEAT_ID, {
-      dtype: 'q8', device: 'wasm', progress_callback: progress('Trăsături'),
+      dtype: 'q8', device: 'wasm', progress_callback: progress('Model'),
     });
   }
   return featModel;
 }
 
-// ---------------------------------------------------------------- utilitare
-function iou(a, b) {
-  const x0 = Math.max(a[0], b[0]), y0 = Math.max(a[1], b[1]);
-  const x1 = Math.min(a[2], b[2]), y1 = Math.min(a[3], b[3]);
-  const inter = Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
-  const ua = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter;
-  return ua > 0 ? inter / ua : 0;
-}
-function nms(dets, thr = 0.5) {
-  const out = [];
-  for (const d of dets.sort((a, b) => b.score - a.score)) {
-    if (out.every((o) => iou(o.box, d.box) < thr)) out.push(d);
-  }
-  return out;
-}
 const median = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[s.length >> 1] : 0; };
 
-// ---------------------------------------------------------------- detector
-async function detect(bitmap, label, W, H) {
-  const det = await loadDetector();
-  const c = new OffscreenCanvas(W, H);
-  c.getContext('2d').drawImage(bitmap, 0, 0, W, H);
-  const id = c.getContext('2d').getImageData(0, 0, W, H);
-  const img = new RawImage(id.data, W, H, 4).rgb();
-  const q = label.trim().toLowerCase().replace(/\.+$/, '') + '.';
-  const res = await det(img, [q], { threshold: 0.1 });
-  const dets = res
-    .map((r) => ({ score: r.score, box: [r.box.xmin, r.box.ymin, r.box.xmax, r.box.ymax] }))
-    .filter((d) => {
-      const a = (d.box[2] - d.box[0]) * (d.box[3] - d.box[1]);
-      return a > 4 && a < 0.97 * W * H;          // doar zgomot / chenarul întregii poze
-    });
-  const kept = nms(dets, 0.5);
-  // un chenar uriaș care conține mai multe obiecte găsite = grupul lor, nu un obiect
-  return kept.filter((d) => {
-    const a = (d.box[2] - d.box[0]) * (d.box[3] - d.box[1]);
-    if (a < 0.3 * W * H) return true;
-    const inside = kept.filter((o) => o !== d && o.box[0] >= d.box[0] - 2 && o.box[1] >= d.box[1] - 2
-      && o.box[2] <= d.box[2] + 2 && o.box[3] <= d.box[3] + 2).length;
-    return inside < 2;
-  });
-}
-
-// prag: 0.25 normal; dacă nimic nu trece, coboară după cel mai bun scor (obiect unic, fotografiat de aproape)
-function detThreshold(dets) {
-  const best = dets.length ? dets[0].score : 0;
-  return best >= 0.25 ? 0.25 : Math.max(0.12, best * 0.75);
-}
-
-function pickPseudoExemplars(dets, W, H, k = 3) {
-  const good = dets.filter((d) => d.score >= detThreshold(dets));
-  if (!good.length) return [];
-  const areas = good.map((d) => (d.box[2] - d.box[0]) * (d.box[3] - d.box[1]));
-  const med = median(areas);
-  return good
-    .filter((d, i) => areas[i] < med * 2.5 && areas[i] > med / 2.5 && areas[i] < 0.5 * W * H)
-    .slice(0, k)
-    .map((d) => d.box);
-}
-
 // ------------------------------------------------- trăsături DINOv2 pe bucăți
-async function featureGrid(bitmap, W, H, exemplars) {
+async function featureGrid(bitmap, W, H, exemplars, longTiles = 0) {
   const model = await loadFeat();
-  // scară: exemplul să ocupe ~4 patch-uri (56px) -> rezoluție bună și pt. obiecte mici
-  const exSize = median(exemplars.map((b) => Math.sqrt((b[2] - b[0]) * (b[3] - b[1]))));
-  let s = Math.max(TILE / Math.max(W, H), 56 / Math.max(exSize, 1));
+  let s;
+  if (longTiles) {
+    s = (longTiles * TILE) / Math.max(W, H);       // scară fixă (pt. căutarea automată)
+  } else {
+    // scară: exemplul să ocupe ~4 patch-uri (56px) -> rezoluție bună și pt. obiecte mici
+    const exSize = median(exemplars.map((b) => Math.sqrt((b[2] - b[0]) * (b[3] - b[1]))));
+    s = Math.max(TILE / Math.max(W, H), 56 / Math.max(exSize, 1));
+  }
   let cols = Math.ceil((W * s) / TILE), rows = Math.ceil((H * s) / TILE);
-  while (cols * rows > 16) { s *= 0.85; cols = Math.ceil((W * s) / TILE); rows = Math.ceil((H * s) / TILE); }
+  while (cols * rows > MAX_TILES) { s *= 0.85; cols = Math.ceil((W * s) / TILE); rows = Math.ceil((H * s) / TILE); }
   cols = Math.max(1, cols); rows = Math.max(1, rows);
   const CW = cols * TILE, CH = rows * TILE;
   const sx = CW / W, sy = CH / H;
@@ -232,49 +169,113 @@ function densityCount(grid, exemplars) {
   return { count, points };
 }
 
+// componente conexe (4-vecini) ale zonei proj > t
+function components(proj, t, GW, GH) {
+  const N = GW * GH, lab = new Int32Array(N).fill(-1), comps = [];
+  for (let i = 0; i < N; i++) {
+    if (proj[i] <= t || lab[i] >= 0) continue;
+    const st = [i]; lab[i] = comps.length;
+    let x0 = GW, y0 = GH, x1 = 0, y1 = 0, area = 0, cxs = 0, cys = 0;
+    while (st.length) {
+      const c = st.pop(), x = c % GW, y = (c / GW) | 0;
+      area++; cxs += x; cys += y;
+      if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y;
+      if (x > 0 && proj[c - 1] > t && lab[c - 1] < 0) { lab[c - 1] = lab[i]; st.push(c - 1); }
+      if (x < GW - 1 && proj[c + 1] > t && lab[c + 1] < 0) { lab[c + 1] = lab[i]; st.push(c + 1); }
+      if (y > 0 && proj[c - GW] > t && lab[c - GW] < 0) { lab[c - GW] = lab[i]; st.push(c - GW); }
+      if (y < GH - 1 && proj[c + GW] > t && lab[c + GW] < 0) { lab[c + GW] = lab[i]; st.push(c + GW); }
+    }
+    comps.push({ area, x0, y0, x1, y1, cx: cxs / area, cy: cys / area });
+  }
+  return comps;
+}
+
+// ------------------------------------------- automat: găsește singur obiectele
+// 1) PC1 al trăsăturilor separă obiectele de fundal (fundalul = ce atinge marginile)
+// 2) componente conexe = obiecte; 3) exemplu = obiectul de mărime tipică
+function autoObjects(grid) {
+  const { F, D, GW, GH, sx, sy } = grid;
+  const N = GW * GH;
+  const mean = new Float32Array(D);
+  for (let i = 0; i < N; i++) for (let d = 0; d < D; d++) mean[d] += F[i * D + d] / N;
+  // PC1 prin iterație de putere
+  let v = new Float32Array(D).map((_, d) => Math.sin(d + 1));
+  const proj = new Float32Array(N);
+  for (let it = 0; it < 25; it++) {
+    const nv = new Float32Array(D);
+    for (let i = 0; i < N; i++) {
+      let p = 0; for (let d = 0; d < D; d++) p += (F[i * D + d] - mean[d]) * v[d];
+      for (let d = 0; d < D; d++) nv[d] += p * (F[i * D + d] - mean[d]);
+    }
+    let n = 0; for (let d = 0; d < D; d++) n += nv[d] * nv[d];
+    n = Math.sqrt(n) || 1; v = nv.map((x) => x / n);
+  }
+  for (let i = 0; i < N; i++) { let p = 0; for (let d = 0; d < D; d++) p += (F[i * D + d] - mean[d]) * v[d]; proj[i] = p; }
+  // semnul: marginile sunt fundal
+  let edge = 0, ne = 0;
+  for (let x = 0; x < GW; x++) { edge += proj[x] + proj[(GH - 1) * GW + x]; ne += 2; }
+  for (let y = 0; y < GH; y++) { edge += proj[y * GW] + proj[y * GW + GW - 1]; ne += 2; }
+  if (edge / ne > 0) for (let i = 0; i < N; i++) proj[i] = -proj[i];
+  // pragul: îl caut pe cel care dă cele mai multe obiecte de mărime asemănătoare (ponderat cu mărimea)
+  let mn = Infinity, mx = -Infinity;
+  for (const p of proj) { if (p < mn) mn = p; if (p > mx) mx = p; }
+  let bestScore = -1, comps = [];
+  for (let k = 1; k <= 24; k++) {
+    const t = mn + (k / 25) * (mx - mn);
+    const cs = components(proj, t, GW, GH);
+    if (!cs.length) continue;
+    const big = Math.max(...cs.map((c) => c.area));
+    const keep = cs.filter((c) => c.area >= Math.max(2, big * 0.08));
+    const med = median(keep.map((c) => c.area));
+    const good = keep.filter((c) => c.area >= med * 0.5 && c.area <= med * 2).length;
+    const score = good * Math.sqrt(med);
+    if (score > bestScore) { bestScore = score; comps = keep; }
+  }
+  // fără fragmente: sub 30% din mărimea tipică
+  const medA = median(comps.map((c) => c.area));
+  const objs = comps.filter((c) => c.area >= medA * 0.3);
+  const toPx = (c) => [c.x0 * PATCH / sx, c.y0 * PATCH / sy, (c.x1 + 1) * PATCH / sx, (c.y1 + 1) * PATCH / sy];
+  return { objs, toPx, toPt: (c) => [(c.cx + 0.5) * PATCH / sx, (c.cy + 0.5) * PATCH / sy, 1] };
+}
+
 // ---------------------------------------------------------------- API
-async function count({ bitmap, W, H, text, boxes }) {
+async function count({ bitmap, W, H, boxes }) {
   const t0 = performance.now();
-  let mode, dets = [], exemplars = boxes || [];
+  const done = (r, mode) => ({ ...r, mode, seconds: (performance.now() - t0) / 1000 });
+  let exemplars = boxes || [];
 
   if (!exemplars.length) {
     post('stage', { text: 'Caut obiectele…' });
-    dets = await detect(bitmap, text || 'object', W, H);
-    exemplars = pickPseudoExemplars(dets, W, H);
-    mode = text ? `text „${text}”` : 'automat';
-  } else {
-    mode = 'după exemplu';
-  }
-
-  dets.sort((a, b) => b.score - a.score);
-  const thr = detThreshold(dets);
-  const detCount = dets.filter((d) => d.score >= thr).length;
-  // puține obiecte și avem text -> detectorul e cel mai precis; altfel densitate
-  if (!boxes?.length && (detCount < 25 || !exemplars.length)) {
-    return {
-      count: detCount,
-      points: dets.filter((d) => d.score >= thr).map((d) => [(d.box[0] + d.box[2]) / 2, (d.box[1] + d.box[3]) / 2, d.score]),
-      boxes: dets, exemplars, mode: mode + ' · detector', seconds: (performance.now() - t0) / 1000,
-    };
+    const g0 = await featureGrid(bitmap, W, H, [], 2);
+    const { objs, toPx, toPt } = autoObjects(g0);
+    if (!objs.length) return done({ count: 0, points: [], exemplars: [] }, 'automat');
+    const med = median(objs.map((o) => o.area));
+    const merged = objs.some((o) => o.area > med * 2.2);   // obiecte lipite -> trebuie densitate
+    // puține obiecte, bine separate -> le numărăm direct
+    if (objs.length <= 3 && !merged) {
+      return done({ count: objs.length, points: objs.map(toPt), exemplars: objs.map(toPx) }, 'automat · obiecte separate');
+    }
+    exemplars = objs
+      .filter((o) => o.area >= med * 0.6 && o.area <= med * 1.6)
+      .sort((a, b) => Math.abs(a.area - med) - Math.abs(b.area - med))
+      .slice(0, 3)
+      .map(toPx);
+    if (!exemplars.length) exemplars = [toPx(objs[0])];
   }
 
   post('stage', { text: 'Compar cu exemplul…' });
   const grid = await featureGrid(bitmap, W, H, exemplars);
   const r = densityCount(grid, exemplars);
-  return {
-    count: r.points.length,            // = punctele afișate (densitatea doar pt. info)
-    points: r.points,
-    boxes: dets, exemplars,
-    mode: mode + ' · similaritate' + (detCount ? ` (detector: ${detCount})` : '') + ` · densitate ≈ ${Math.round(r.count)}`,
-    seconds: (performance.now() - t0) / 1000,
-  };
+  return done(
+    { count: r.points.length, points: r.points, exemplars },
+    (boxes?.length ? 'după exemplu' : 'automat') + ` · similaritate · densitate ≈ ${Math.round(r.count)}`,
+  );
 }
 
 self.onmessage = async (e) => {
   const { id, cmd } = e.data;
   try {
     if (cmd === 'warmup') {
-      await loadDetector();
       await loadFeat();
       post('ready', { id, threads: env.backends.onnx.wasm.numThreads });
     } else if (cmd === 'count') {

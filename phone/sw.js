@@ -1,7 +1,7 @@
 // VicCount service worker: merge offline (modul avion) +
 // antete COOP/COEP ca să meargă WASM multi-thread (mai rapid).
 const MODELS = 'viccount-v2';          // modele + motor (rămân la actualizări)
-const VERSION = 'viccount-shell-3';    // aplicația
+const VERSION = 'viccount-shell-4';    // aplicația
 const SHELL = ['./', './index.html', './app.js', './worker.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -11,6 +11,9 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
     for (const k of await caches.keys()) if (k !== VERSION && k !== MODELS) await caches.delete(k);
+    // detectorul vechi (~200 MB) nu mai e folosit -> eliberează spațiul
+    const mc = await caches.open(MODELS);
+    for (const r of await mc.keys()) if (r.url.includes('/grounding-dino-tiny/')) await mc.delete(r);
     await self.clients.claim();
   })());
 });

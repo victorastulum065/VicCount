@@ -62,37 +62,6 @@ function busy(on, text, frac) {
   if (frac != null) $('barFill').style.width = Math.round(frac * 100) + '%';
 }
 
-// ---------------- RO -> EN (detectorul înțelege engleză)
-const RO = {
-  sticla:'bottle',sticle:'bottle',pahar:'glass',pahare:'glass',cana:'cup',cani:'cup',ceasca:'cup',
-  om:'person',oameni:'person',persoana:'person',persoane:'person',copil:'child',copii:'child',
-  masina:'car',masini:'car',auto:'car',camion:'truck',bicicleta:'bicycle',motocicleta:'motorcycle',
-  scaun:'chair',scaune:'chair',masa:'table',mese:'table',sezlong:'sunbed',sezlonguri:'sunbed',umbrela:'umbrella',umbrele:'umbrella',
-  moneda:'coin',monede:'coin',banut:'coin',banuti:'coin',bancnota:'banknote',
-  ou:'egg',oua:'egg',mar:'apple',mere:'apple',portocala:'orange',portocale:'orange',lamaie:'lemon',rosie:'tomato',rosii:'tomato',
-  cutie:'box',cutii:'box',palet:'pallet',paleti:'pallet',sac:'bag',saci:'bag',punga:'bag',
-  surub:'screw',suruburi:'screw',piulita:'nut',cui:'nail',cuie:'nail',
-  caramida:'brick',caramizi:'brick',teava:'pipe',tevi:'pipe',busteni:'log',bustean:'log',
-  cablu:'cable',cabluri:'cable',microfon:'microphone',microfoane:'microphone',boxa:'speaker',boxe:'speaker',
-  pasare:'bird',pasari:'bird',oaie:'sheep',oi:'sheep',vaca:'cow',vaci:'cow',caine:'dog',caini:'dog',pisica:'cat',pisici:'cat',peste:'fish',pesti:'fish',
-  floare:'flower',flori:'flower',copac:'tree',copaci:'tree',frunza:'leaf',frunze:'leaf',
-  pastila:'pill',pastile:'pill',creion:'pencil',creioane:'pencil',pix:'pen',pixuri:'pen',carte:'book',carti:'book',
-  bec:'light bulb',becuri:'light bulb',dop:'bottle cap',dopuri:'bottle cap',capac:'lid',capace:'lid',
-  doza:'can',doze:'can',suc:'soda',bere:'beer',farfurie:'plate',farfurii:'plate',lingura:'spoon',furculita:'fork',cutit:'knife',
-  telefon:'phone',telefoane:'phone',laptop:'laptop',fereastra:'window',ferestre:'window',usa:'door',usi:'door',
-  barca:'boat',barci:'boat',casa:'house',case:'house',minge:'ball',mingi:'ball',
-};
-const PHRASES = {
-  'doza de suc': 'soda can', 'doze de suc': 'soda can', 'doza de bere': 'beer can', 'doze de bere': 'beer can',
-  'sticla de apa': 'water bottle', 'sticle de apa': 'water bottle', 'sticla de bere': 'beer bottle', 'sticle de bere': 'beer bottle',
-};
-const STOP = new Set(['de', 'cu', 'si', 'din', 'la', 'pe', 'in', 'un', 'o', 'niste']);
-function toEnglish(t) {
-  const n = t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
-  if (PHRASES[n]) return PHRASES[n];
-  return n.split(' ').filter((w) => !STOP.has(w)).map((w) => RO[w] || w).join(' ');
-}
-
 // ---------------- încărcare imagine
 stage.addEventListener('click', () => { if (!img) $('file').click(); });
 $('pick').onclick = () => $('file').click();
@@ -155,18 +124,17 @@ $('clr').onclick = () => { ex = []; $('clr').disabled = true; draw(); };
 
 // ---------------- numărare
 $('go').onclick = run;
-$('text').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.target.blur(); run(); } });
 
 async function run() {
   if (!img) return;
   busy(true, ex.length ? 'Număr după exemplu…' : 'Număr…'); $('go').disabled = true;
   try {
     const bm = await createImageBitmap(img);
-    const r = await call({ cmd: 'count', bitmap: bm, W: img.width, H: img.height, text: toEnglish($('text').value), boxes: ex }, [bm]);
+    const r = await call({ cmd: 'count', bitmap: bm, W: img.width, H: img.height, boxes: ex }, [bm]);
     res = r; removed.clear(); added = [];
     $('meta').textContent = r.count === 0
-      ? 'N-am găsit nimic sigur. Scrie ce să numere sau trage un chenar peste un obiect.'
-      : `${r.mode} · ${r.seconds.toFixed(1)} s`;
+      ? 'N-am găsit nimic sigur. Trage un chenar peste un obiect și apasă Numără.'
+      : `${r.mode} · ${r.seconds.toFixed(1)} s` + (ex.length ? '' : ' · Nu e corect? Trage un chenar peste un obiect și apasă Numără.');
     $('save').disabled = false;
   } catch (err) {
     $('meta').innerHTML = '<span class="err">Eroare: ' + String(err.message).slice(0, 160) + '</span>';
