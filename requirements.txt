@@ -1,0 +1,18 @@
+# torch/torchvision se instalează din setup (CUDA dacă ai placă NVIDIA, altfel CPU)
+transformers>=4.40,<5
+timm
+scipy
+addict
+yapf==0.40.1
+termcolor
+pyyaml
+matplotlib
+opencv-python-headless
+pycocotools
+numpy
+pillow
+fastapi
+uvicorn
+python-multipart
+huggingface_hub
+gdown
