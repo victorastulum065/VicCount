@@ -1,0 +1,66 @@
+# Publică aplicația de telefon pe GitHub Pages, cu modelele găzduite în același loc
+# (fără servere externe la rulare). Rulează automat la fiecare push pe main.
+name: Deploy VicCount (telefon)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Aplicația
+        run: |
+          mkdir -p site
+          cp -r phone/* site/
+
+      - name: transformers.js + ONNX Runtime (local, fără CDN)
+        run: |
+          npm pack @huggingface/transformers@3.8.1
+          tar xzf huggingface-transformers-3.8.1.tgz
+          mkdir -p site/vendor
+          cp package/dist/transformers.min.js package/dist/ort-wasm-simd-threaded.jsep.mjs package/dist/ort-wasm-simd-threaded.jsep.wasm site/vendor/
+
+      - name: Modele (Grounding DINO tiny + DINOv2-reg small, int8)
+        run: |
+          pip install -q "huggingface_hub>=0.24"
+          python - <<'EOF'
+          from huggingface_hub import snapshot_download
+          for repo, name in [("onnx-community/grounding-dino-tiny-ONNX", "grounding-dino-tiny"),
+                             ("onnx-community/dinov2-with-registers-small", "dinov2-reg-small")]:
+              snapshot_download(repo, local_dir=f"site/models/{name}",
+                                allow_patterns=["*.json", "onnx/model_quantized.onnx"])
+          EOF
+          rm -rf site/models/*/.cache
+          du -sh site site/models/*
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,82 +1,32 @@
 # VicCount
 
-Pui o poză → îți spune câte obiecte sunt. Orice obiecte. Rulează **100% local, offline**, din browser (PC sau telefon în aceeași rețea).
+Pui o poză și îți spune câte obiecte sunt. Merge pe **telefon**, totul rulează local, fără server. După prima deschidere funcționează și **offline** (inclusiv în modul avion).
 
-Model: **CountGD++** (Amini-Naieni & Zisserman, CVPR 2026, licență MIT) — numărare open-world: nu e antrenat pe clase fixe, numără orice îi arăți.
+**Aplicația:** https://victorastulum065.github.io/VicCount/ → din meniul browserului: *Adaugă pe ecranul principal*.
 
-## Instalare (o singură dată, cu internet)
+## Cum numără
 
-Necesită Python 3.10+. Descarcă ~1.7 GB (model + BERT).
-
-| Sistem | Comandă |
+| Ce faci | Ce se întâmplă |
 |---|---|
-| Windows | dublu-click `setup.bat` |
-| macOS / Linux | `./setup.sh` |
+| Doar poza | automat: găsește tipul dominant de obiect și le numără |
+| Scrii ce (ro sau en: *sticle, oameni, monede*) | numără doar asta |
+| Tragi un chenar peste **un** obiect | numără tot ce seamănă cu el (cel mai precis, merge pe orice) |
+| Atingi un punct / un loc gol | scoți / adaugi manual |
 
-Pe PC cu placă NVIDIA se instalează automat varianta CUDA.
+Modele, rulate în browser (ONNX, int8):
+- **Grounding DINO tiny**: detecție open-vocabulary după text.
+- **DINOv2 (cu registre) small**: numărare după exemplu prin similaritate de trăsături, metoda *CountingDINO* (WACV 2026, fără antrenare, pe orice obiect).
 
-## Pornire (offline)
+Pentru puține obiecte se folosește detectorul. Pentru multe obiecte sau după exemplu se folosește similaritatea DINOv2, pe bucăți de înaltă rezoluție.
 
-- Windows: `start.bat`
-- macOS / Linux: `./start.sh`
+Prima deschidere descarcă ~250 MB (model + motor), o singură dată. De preferat pe Wi-Fi.
 
-Deschide `http://localhost:8765`. Din telefon: adresa afișată în consolă (`http://IP-PC:8765`).
+## Publicare
 
-## Utilizare
+`.github/workflows/pages.yml` construiește site-ul la fiecare push pe `main`: copiază `phone/`, ia transformers.js + ONNX Runtime din npm și modelele de pe Hugging Face. Totul e servit de pe GitHub Pages, de pe același domeniu.
 
-| Cum | Ce face |
-|---|---|
-| Doar poza | **Automat** — numără tipul de obiect dominant din poză |
-| Poza + text (engleză: `bottle`, `person`, `coin`) | numără doar ce ai scris |
-| Poza + chenar tras peste un obiect | numără tot ce seamănă cu exemplul (cel mai precis) |
-| Câmpul *Exclude* | ce să **nu** numere (ex: `cap` la sticle) |
+Setare unică: **Settings → Pages → Source: GitHub Actions**.
 
-- **Sensibilitate** — recalculează live, fără să ruleze iar modelul.
-- **Tap pe un punct** — îl scoate/pune la loc (corecție manuală).
-- **Salvează PNG** — poza adnotată cu totalul.
+## Varianta PC (mai precisă)
 
-Automat, VicCount face o a 2-a trecere cu „pseudo-exemplu" (cel mai sigur obiect găsit devine exemplu vizual — metoda din lucrarea CountGD++), iar la poze foarte aglomerate (peste ~700 obiecte) împarte imaginea în bucăți și unește rezultatele.
-
-## API
-
-```
-POST /api/count   (multipart)
-  image     fișier
-  text      opțional
-  neg_text  opțional
-  boxes     opțional, JSON [[x1,y1,x2,y2], ...] în pixeli
-  refine    true/false (a 2-a trecere)
-→ {"count": 42, "boxes": [[cx,cy,w,h], ...], "scores": [...], "mode": "...", "seconds": 1.2}
-```
-
-```bash
-curl -F image=@poza.jpg -F text=bottle http://localhost:8765/api/count
-```
-
-## Setări (variabile de mediu)
-
-| Variabilă | Implicit | |
-|---|---|---|
-| `VICCOUNT_DEVICE` | `auto` | `cuda`, `cpu`, `mps` |
-| `VICCOUNT_THREADS` | toate | fire CPU |
-| `VICCOUNT_MAX_SIDE` | `2400` | latura maximă a imaginii |
-
-Port: `start.bat --port 9000`.
-
-## Viteză orientativă
-
-GPU NVIDIA: sub 1 s / poză. CPU modern: ~5–15 s / trecere (modul automat face 2 treceri).
-
-## Structură
-
-```
-server.py            server web + API
-engine.py            logica de numărare (moduri, pseudo-exemplu, tiling)
-download_weights.py  descărcare unică model
-web/index.html       interfața
-countgd/             cod model CountGD++ (MIT, vendorizat, rulează pe CPU fără compilare)
-```
-
-## Credite
-
-CountGD++ — https://github.com/niki-amini-naieni/CountGDPlusPlus (MIT) · bazat pe GroundingDINO (Apache 2.0).
+`pc/`: server local cu **CountGD++** (CVPR 2026), accesibil și de pe telefon în rețeaua locală. Vezi `pc/README.md`.
