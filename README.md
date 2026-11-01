@@ -25,7 +25,7 @@ Prima deschidere descarcă ~250 MB (model + motor), o singură dată. De prefera
 
 `.github/workflows/pages.yml` construiește site-ul la fiecare push pe `main`: copiază `phone/`, ia transformers.js + ONNX Runtime din npm și modelele de pe Hugging Face. Totul e servit de pe GitHub Pages, de pe același domeniu.
 
-Setare unică: **Settings → Pages → Source: GitHub Actions**.
+Publicarea se face pe ramura `gh-pages` (fișierele >90 MB sunt tăiate în bucăți și lipite la loc de service worker). Dacă Pages nu pornește singur: Settings → Pages → Deploy from a branch → `gh-pages` / root.
 
 ## Varianta PC (mai precisă)
 

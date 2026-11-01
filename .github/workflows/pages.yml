@@ -1,5 +1,6 @@
-# Publică aplicația de telefon pe GitHub Pages, cu modelele găzduite în același loc
-# (fără servere externe la rulare). Rulează automat la fiecare push pe main.
+# Construiește aplicația de telefon (app + motor + modele) și o publică pe ramura gh-pages.
+# Fișierele > 90 MB sunt tăiate în bucăți (limita GitHub e 100 MB/fișier);
+# service worker-ul le lipește la loc pe telefon.
 name: Deploy VicCount (telefon)
 
 on:
@@ -8,16 +9,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,6 +29,7 @@ jobs:
         run: |
           mkdir -p site
           cp -r phone/* site/
+          touch site/.nojekyll
 
       - name: transformers.js + ONNX Runtime (local, fără CDN)
         run: |
@@ -49,18 +49,34 @@ jobs:
                                 allow_patterns=["*.json", "onnx/model_quantized.onnx"])
           EOF
           rm -rf site/models/*/.cache
-          du -sh site site/models/*
 
-      - uses: actions/upload-pages-artifact@v3
+      - name: Taie fișierele mari în bucăți
+        run: |
+          python - <<'EOF'
+          import json, os
+          LIM = 90 * 1024 * 1024
+          for root, _, files in os.walk("site"):
+              for f in files:
+                  p = os.path.join(root, f)
+                  size = os.path.getsize(p)
+                  if size <= LIM:
+                      continue
+                  n = 0
+                  with open(p, "rb") as src:
+                      while chunk := src.read(LIM):
+                          with open(f"{p}.part{n}", "wb") as out:
+                              out.write(chunk)
+                          n += 1
+                  json.dump({"parts": n, "size": size}, open(p + ".parts.json", "w"))
+                  os.remove(p)
+                  print(f"{p}: {size} B -> {n} bucăți")
+          EOF
+          du -sh site; find site -size +50M
+
+      - name: Publică pe gh-pages
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: site
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          publish_branch: gh-pages
+          force_orphan: true
