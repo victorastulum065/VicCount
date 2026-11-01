@@ -1,0 +1,42 @@
+# Experiment: variante de cuantizare ale detectorului (doar pentru testare memorie)
+name: Experiment modele
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/exp-models.yml"]
+permissions:
+  contents: write
+jobs:
+  exp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: |
+          pip install -q "huggingface_hub>=0.24"
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+          snapshot_download("onnx-community/grounding-dino-tiny-ONNX", local_dir="exp/gd",
+                            allow_patterns=["onnx/model_q4.onnx", "onnx/model_q4f16.onnx", "onnx/model_fp16.onnx", "onnx/model_bnb4.onnx"])
+          PY
+          python - <<'PY'
+          import json, os
+          LIM = 90 * 1024 * 1024
+          for root, _, files in os.walk("exp"):
+              for f in files:
+                  p = os.path.join(root, f); size = os.path.getsize(p)
+                  if size <= LIM: continue
+                  n = 0
+                  with open(p, "rb") as src:
+                      while chunk := src.read(LIM):
+                          open(f"{p}.part{n}", "wb").write(chunk); n += 1
+                  json.dump({"parts": n, "size": size}, open(p + ".parts.json", "w")); os.remove(p)
+          PY
+          rm -rf exp/gd/.cache
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./exp
+          publish_branch: exp-models
+          force_orphan: true
