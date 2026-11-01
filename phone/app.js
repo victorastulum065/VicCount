@@ -27,17 +27,32 @@ async function setupSW() {
 // ---------------- worker
 let worker, seq = 0;
 const pending = new Map();
+let lastBeat = Date.now();
+function failAll(msg) {
+  for (const p of pending.values()) p.reject(new Error(msg));
+  pending.clear();
+}
 function call(msg, transfer = []) {
   return new Promise((resolve, reject) => {
     const id = ++seq; pending.set(id, { resolve, reject });
+    lastBeat = Date.now();
     worker.postMessage({ ...msg, id }, transfer);
   });
 }
+// dacă motorul tace 3 minute (oprit de sistem, memorie), îl repornim în loc să așteptăm la nesfârșit
+setInterval(() => {
+  if (pending.size && Date.now() - lastBeat > 180000) {
+    worker.terminate();
+    failAll('Telefonul a oprit calculul (memorie). Încearcă o poză mai mică sau închide alte aplicații.');
+    startWorker();
+  }
+}, 5000);
 function startWorker() {
   worker = new Worker('worker.js', { type: 'module' });
   const files = {};
   worker.onmessage = (e) => {
     const m = e.data;
+    lastBeat = Date.now();
     if (m.type === 'progress') {
       files[m.file] = [m.loaded, m.total];
       const [l, t] = Object.values(files).reduce((a, v) => [a[0] + v[0], a[1] + v[1]], [0, 0]);
@@ -52,7 +67,12 @@ function startWorker() {
       pending.get(m.id)?.reject(new Error(m.message)); pending.delete(m.id);
     }
   };
-  worker.onerror = (e) => { $('status').innerHTML = '<span class="err">eroare motor</span>'; console.error(e); };
+  worker.onerror = (e) => {
+    console.error(e);
+    failAll('Motorul s-a oprit: ' + (e.message || 'eroare necunoscută'));
+    worker.terminate();
+    startWorker();
+  };
 }
 
 function busy(on, text, frac) {
