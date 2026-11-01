@@ -1,6 +1,7 @@
-// VicCount service worker: tot din cache (merge în modul avion) +
+// VicCount service worker: merge offline (modul avion) +
 // antete COOP/COEP ca să meargă WASM multi-thread (mai rapid).
-const VERSION = 'viccount-v2';
+const MODELS = 'viccount-v2';          // modele + motor (rămân la actualizări)
+const VERSION = 'viccount-shell-3';    // aplicația
 const SHELL = ['./', './index.html', './app.js', './worker.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -9,7 +10,7 @@ self.addEventListener('install', (e) => {
 
 self.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
-    for (const k of await caches.keys()) if (k !== VERSION) await caches.delete(k);
+    for (const k of await caches.keys()) if (k !== VERSION && k !== MODELS) await caches.delete(k);
     await self.clients.claim();
   })());
 });
@@ -23,6 +24,7 @@ function isolate(res) {
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers: h });
 }
 
+// fișierele mari (>90 MB) sunt publicate în bucăți: <fișier>.parts.json + .part0, .part1…
 async function joinParts(url) {
   const meta = await fetch(url + '.parts.json');
   if (!meta.ok) return new Response('Not found', { status: 404 });
@@ -54,18 +56,25 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
   e.respondWith((async () => {
-    const cache = await caches.open(VERSION);
-    const hit = await cache.match(req, { ignoreSearch: true });
-    if (hit) {
-      // app shell: actualizează în fundal; modelele rămân cum sunt
-      if (!req.url.includes('/models/') && !req.url.includes('/vendor/')) {
-        fetch(req).then((r) => r.ok && cache.put(req, r)).catch(() => {});
+    const heavy = req.url.includes('/models/') || req.url.includes('/vendor/');
+    if (!heavy) {
+      // aplicația: întâi rețeaua (actualizări imediate), altfel din cache (offline)
+      const cache = await caches.open(VERSION);
+      try {
+        const res = await fetch(req);
+        if (res.ok) cache.put(req, res.clone()).catch(() => {});
+        return isolate(res);
+      } catch {
+        const hit = await caches.match(req, { ignoreSearch: true });
+        return hit ? isolate(hit) : new Response('Offline', { status: 503 });
       }
-      return isolate(hit);
     }
+    // modele + motor: din cache; prima dată din rețea, apoi salvate
+    const cache = await caches.open(MODELS);
+    const hit = await cache.match(req, { ignoreSearch: true });
+    if (hit) return isolate(hit);
     try {
       let res = await fetch(req);
-      // fișierele mari (>90 MB) sunt publicate în bucăți: <fișier>.parts.json + .part0, .part1…
       if (res.status === 404 && req.url.endsWith('.onnx')) res = await joinParts(req.url);
       if (res.ok) {
         const [a, b] = res.body.tee();

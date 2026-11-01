@@ -69,23 +69,37 @@ async function detect(bitmap, label, W, H) {
   const id = c.getContext('2d').getImageData(0, 0, W, H);
   const img = new RawImage(id.data, W, H, 4).rgb();
   const q = label.trim().toLowerCase().replace(/\.+$/, '') + '.';
-  const res = await det(img, [q], { threshold: 0.15 });
+  const res = await det(img, [q], { threshold: 0.1 });
   const dets = res
     .map((r) => ({ score: r.score, box: [r.box.xmin, r.box.ymin, r.box.xmax, r.box.ymax] }))
     .filter((d) => {
       const a = (d.box[2] - d.box[0]) * (d.box[3] - d.box[1]);
-      return a > 4 && a < 0.6 * W * H;           // fără fundal / zgomot
+      return a > 4 && a < 0.97 * W * H;          // doar zgomot / chenarul întregii poze
     });
-  return nms(dets, 0.5);
+  const kept = nms(dets, 0.5);
+  // un chenar uriaș care conține mai multe obiecte găsite = grupul lor, nu un obiect
+  return kept.filter((d) => {
+    const a = (d.box[2] - d.box[0]) * (d.box[3] - d.box[1]);
+    if (a < 0.3 * W * H) return true;
+    const inside = kept.filter((o) => o !== d && o.box[0] >= d.box[0] - 2 && o.box[1] >= d.box[1] - 2
+      && o.box[2] <= d.box[2] + 2 && o.box[3] <= d.box[3] + 2).length;
+    return inside < 2;
+  });
+}
+
+// prag: 0.25 normal; dacă nimic nu trece, coboară după cel mai bun scor (obiect unic, fotografiat de aproape)
+function detThreshold(dets) {
+  const best = dets.length ? dets[0].score : 0;
+  return best >= 0.25 ? 0.25 : Math.max(0.12, best * 0.75);
 }
 
 function pickPseudoExemplars(dets, W, H, k = 3) {
-  const good = dets.filter((d) => d.score >= 0.25);
+  const good = dets.filter((d) => d.score >= detThreshold(dets));
   if (!good.length) return [];
   const areas = good.map((d) => (d.box[2] - d.box[0]) * (d.box[3] - d.box[1]));
   const med = median(areas);
   return good
-    .filter((d, i) => areas[i] < med * 2.5 && areas[i] > med / 2.5 && areas[i] < 0.2 * W * H)
+    .filter((d, i) => areas[i] < med * 2.5 && areas[i] > med / 2.5 && areas[i] < 0.5 * W * H)
     .slice(0, k)
     .map((d) => d.box);
 }
@@ -232,12 +246,14 @@ async function count({ bitmap, W, H, text, boxes }) {
     mode = 'după exemplu';
   }
 
-  const detCount = dets.filter((d) => d.score >= 0.25).length;
+  dets.sort((a, b) => b.score - a.score);
+  const thr = detThreshold(dets);
+  const detCount = dets.filter((d) => d.score >= thr).length;
   // puține obiecte și avem text -> detectorul e cel mai precis; altfel densitate
   if (!boxes?.length && (detCount < 25 || !exemplars.length)) {
     return {
       count: detCount,
-      points: dets.filter((d) => d.score >= 0.25).map((d) => [(d.box[0] + d.box[2]) / 2, (d.box[1] + d.box[3]) / 2, d.score]),
+      points: dets.filter((d) => d.score >= thr).map((d) => [(d.box[0] + d.box[2]) / 2, (d.box[1] + d.box[3]) / 2, d.score]),
       boxes: dets, exemplars, mode: mode + ' · detector', seconds: (performance.now() - t0) / 1000,
     };
   }

@@ -8,7 +8,13 @@ let img = null, bitmap = null, ex = [], res = null, removed = new Set(), added =
 async function setupSW() {
   if (!('serviceWorker' in navigator)) return;
   try {
-    await navigator.serviceWorker.register('sw.js');
+    // versiune nouă publicată -> reîncarcă o dată, automat
+    if (navigator.serviceWorker.controller) {
+      let done = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => { if (!done) { done = true; location.reload(); } });
+    }
+    const reg = await navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' });
+    reg.update().catch(() => {});
     if (!navigator.serviceWorker.controller && !sessionStorage.getItem('vc-reload')) {
       sessionStorage.setItem('vc-reload', '1');
       await navigator.serviceWorker.ready;
@@ -72,13 +78,19 @@ const RO = {
   floare:'flower',flori:'flower',copac:'tree',copaci:'tree',frunza:'leaf',frunze:'leaf',
   pastila:'pill',pastile:'pill',creion:'pencil',creioane:'pencil',pix:'pen',pixuri:'pen',carte:'book',carti:'book',
   bec:'light bulb',becuri:'light bulb',dop:'bottle cap',dopuri:'bottle cap',capac:'lid',capace:'lid',
-  doza:'can',doze:'can',farfurie:'plate',farfurii:'plate',lingura:'spoon',furculita:'fork',cutit:'knife',
+  doza:'can',doze:'can',suc:'soda',bere:'beer',farfurie:'plate',farfurii:'plate',lingura:'spoon',furculita:'fork',cutit:'knife',
   telefon:'phone',telefoane:'phone',laptop:'laptop',fereastra:'window',ferestre:'window',usa:'door',usi:'door',
   barca:'boat',barci:'boat',casa:'house',case:'house',minge:'ball',mingi:'ball',
 };
+const PHRASES = {
+  'doza de suc': 'soda can', 'doze de suc': 'soda can', 'doza de bere': 'beer can', 'doze de bere': 'beer can',
+  'sticla de apa': 'water bottle', 'sticle de apa': 'water bottle', 'sticla de bere': 'beer bottle', 'sticle de bere': 'beer bottle',
+};
+const STOP = new Set(['de', 'cu', 'si', 'din', 'la', 'pe', 'in', 'un', 'o', 'niste']);
 function toEnglish(t) {
-  const n = t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
-  return n.split(/\s+/).map((w) => RO[w] || w).join(' ');
+  const n = t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+  if (PHRASES[n]) return PHRASES[n];
+  return n.split(' ').filter((w) => !STOP.has(w)).map((w) => RO[w] || w).join(' ');
 }
 
 // ---------------- încărcare imagine
@@ -152,7 +164,9 @@ async function run() {
     const bm = await createImageBitmap(img);
     const r = await call({ cmd: 'count', bitmap: bm, W: img.width, H: img.height, text: toEnglish($('text').value), boxes: ex }, [bm]);
     res = r; removed.clear(); added = [];
-    $('meta').textContent = `${r.mode} · ${r.seconds.toFixed(1)} s`;
+    $('meta').textContent = r.count === 0
+      ? 'N-am găsit nimic sigur. Scrie ce să numere sau trage un chenar peste un obiect.'
+      : `${r.mode} · ${r.seconds.toFixed(1)} s`;
     $('save').disabled = false;
   } catch (err) {
     $('meta').innerHTML = '<span class="err">Eroare: ' + String(err.message).slice(0, 160) + '</span>';
